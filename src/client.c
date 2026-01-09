@@ -20,12 +20,95 @@
  * ============================================================================
  */
 
-#include <stdio.h>      // printf()
 #include <stdlib.h>     // exit(), EXIT_FAILURE
 #include <unistd.h>     // write(), close(), STDOUT_FILENO
 #include <fcntl.h>      // open(), O_WRONLY
 #include <sys/stat.h>   // permissões de ficheiros
 #include <string.h>     // strlen(), strcat()
+#include <errno.h>      // errno
+
+/*
+ * ============================================================================
+ * FUNÇÕES AUXILIARES PARA I/O SEM USAR STDIO.H
+ * ============================================================================
+ */
+
+/*
+ * Escreve uma string no stdout
+ */
+void print_str(const char *str) {
+    write(STDOUT_FILENO, str, strlen(str));
+}
+
+/*
+ * Escreve uma string no stderr
+ */
+void print_err(const char *str) {
+    write(STDERR_FILENO, str, strlen(str));
+}
+
+/*
+ * Converte um inteiro para string e escreve-o
+ */
+int print_int(int fd, int num) {
+    char buffer[32];
+    int i = 0;
+    int is_negative = 0;
+    
+    if (num == 0) {
+        write(fd, "0", 1);
+        return 1;
+    }
+    
+    if (num < 0) {
+        is_negative = 1;
+        num = -num;
+    }
+    
+    while (num > 0) {
+        buffer[i++] = '0' + (num % 10);
+        num /= 10;
+    }
+    
+    if (is_negative) {
+        buffer[i++] = '-';
+    }
+    
+    for (int j = i - 1; j >= 0; j--) {
+        write(fd, &buffer[j], 1);
+    }
+    
+    return i;
+}
+
+/*
+ * Substitui perror()
+ */
+void print_error(const char *msg) {
+    print_err("[CLIENT] ");
+    print_err(msg);
+    print_err(": ");
+    
+    switch (errno) {
+        case EACCES:
+            print_err("Permission denied");
+            break;
+        case EEXIST:
+            print_err("File exists");
+            break;
+        case ENOENT:
+            print_err("No such file or directory");
+            break;
+        case ENOMEM:
+            print_err("Out of memory");
+            break;
+        default:
+            print_err("Error code ");
+            print_int(STDERR_FILENO, errno);
+            break;
+    }
+    print_err("\n");
+}
 
 /* 
  * Caminho do FIFO - tem de ser igual no cliente e no servidor
@@ -92,7 +175,7 @@ int main(int argc, char *argv[]) {
         
         // Verifica se ainda há espaço na mensagem
         if (strlen(message) + strlen(argv[i]) + 2 > MAX_MESSAGE) {
-            write(STDERR_FILENO, "[CLIENT] Erro: mensagem demasiado longa\n", 40);
+            print_err("[CLIENT] Erro: mensagem demasiado longa\n");
             exit(EXIT_FAILURE);
         }
         
@@ -118,7 +201,7 @@ int main(int argc, char *argv[]) {
      */
     fd = open(FIFO_PATH, O_WRONLY);
     if (fd == -1) {
-        perror("open");  // Mostra o erro (ex: "No such file or directory")
+        print_error("open");  // Mostra o erro (ex: "No such file or directory")
         exit(EXIT_FAILURE);
     }
 
@@ -136,7 +219,7 @@ int main(int argc, char *argv[]) {
      */
     ssize_t written = write(fd, message, strlen(message));
     if (written == -1) {
-        perror("write");
+        print_error("write");
         close(fd);
         exit(EXIT_FAILURE);
     }
@@ -146,9 +229,15 @@ int main(int argc, char *argv[]) {
      * PASSO 5: Mostrar confirmação ao utilizador
      * ========================================================================
      */
-    printf("[CLIENT] Enviados %d comando(s):\n", argc - 1);
+    print_str("[CLIENT] Enviados ");
+    print_int(STDOUT_FILENO, argc - 1);
+    print_str(" comando(s):\n");
     for (int i = 1; i < argc; i++) {
-        printf("  %d: %s\n", i, argv[i]);
+        print_str("  ");
+        print_int(STDOUT_FILENO, i);
+        print_str(": ");
+        print_str(argv[i]);
+        print_str("\n");
     }
 
     /*
