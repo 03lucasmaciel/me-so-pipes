@@ -35,6 +35,7 @@
 #include <errno.h>      // errno, EEXIST
 #include <sys/wait.h>   // waitpid(), WIFEXITED(), WEXITSTATUS()
 #include <signal.h>     // signal(), SIGINT, SIGTERM
+#include <time.h>       // time(), localtime()
 
 /* 
  * Caminho do FIFO - tem de ser igual no cliente e no servidor
@@ -185,6 +186,76 @@ void print_error(const char *msg) {
     print_err("\n");
 }
 
+/*
+ * ============================================================================
+ * FUNÇÃO: format_timestamp
+ * ============================================================================
+ * 
+ * OBJETIVO:
+ * Formata um timestamp no formato "YYYY-MM-DD HH:MM:SS" e escreve num buffer.
+ * 
+ * IMPORTANTE:
+ * Não usamos strftime() para manter a pureza das syscalls.
+ * Fazemos formatação manual com conversão de inteiros para strings.
+ * 
+ * PARÂMETROS:
+ *   - buffer: onde escrever o timestamp (deve ter pelo menos 20 bytes)
+ *   - size: tamanho do buffer
+ * 
+ * RETORNO:
+ *   - Número de caracteres escritos
+ * 
+ * FORMATO:
+ *   "2026-01-09 11:30:45"
+ *    0123456789012345678
+ *    (19 caracteres + \0)
+ */
+int format_timestamp(char *buffer, int size) {
+    if (size < 20) return 0;  // Buffer muito pequeno
+    
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    
+    // Formata manualmente: YYYY-MM-DD HH:MM:SS
+    int pos = 0;
+    
+    // Ano (4 dígitos)
+    int year = 1900 + t->tm_year;
+    buffer[pos++] = '0' + (year / 1000);
+    buffer[pos++] = '0' + ((year / 100) % 10);
+    buffer[pos++] = '0' + ((year / 10) % 10);
+    buffer[pos++] = '0' + (year % 10);
+    buffer[pos++] = '-';
+    
+    // Mês (2 dígitos)
+    int month = t->tm_mon + 1;
+    buffer[pos++] = '0' + (month / 10);
+    buffer[pos++] = '0' + (month % 10);
+    buffer[pos++] = '-';
+    
+    // Dia (2 dígitos)
+    buffer[pos++] = '0' + (t->tm_mday / 10);
+    buffer[pos++] = '0' + (t->tm_mday % 10);
+    buffer[pos++] = ' ';
+    
+    // Hora (2 dígitos)
+    buffer[pos++] = '0' + (t->tm_hour / 10);
+    buffer[pos++] = '0' + (t->tm_hour % 10);
+    buffer[pos++] = ':';
+    
+    // Minuto (2 dígitos)
+    buffer[pos++] = '0' + (t->tm_min / 10);
+    buffer[pos++] = '0' + (t->tm_min % 10);
+    buffer[pos++] = ':';
+    
+    // Segundo (2 dígitos)
+    buffer[pos++] = '0' + (t->tm_sec / 10);
+    buffer[pos++] = '0' + (t->tm_sec % 10);
+    
+    buffer[pos] = '\0';
+    return pos;
+}
+
 
 /*
  * ============================================================================
@@ -192,15 +263,19 @@ void print_error(const char *msg) {
  * ============================================================================
  * 
  * OBJETIVO:
- * Escreve uma linha no ficheiro de log.
+ * Escreve uma linha no ficheiro de log com timestamp.
  * 
  * PARÂMETROS:
  *   - line: texto a escrever no log
  * 
  * COMO FUNCIONA:
  * 1. Abre o ficheiro de log (cria se não existir)
- * 2. Escreve a linha no final do ficheiro (append)
- * 3. Fecha o ficheiro
+ * 2. Formata o timestamp atual
+ * 3. Escreve "[TIMESTAMP] linha" no final do ficheiro (append)
+ * 4. Fecha o ficheiro
+ * 
+ * FORMATO:
+ *   [2026-01-09 11:30:45] ls -la; exit status: 0
  * 
  * NOTA: Abrimos e fechamos o ficheiro em cada escrita para garantir
  * que os dados são guardados mesmo se o servidor crashar.
@@ -219,6 +294,15 @@ void append_log(const char *line) {
         return;
     }
 
+    // Formata e escreve o timestamp
+    char timestamp[32];
+    write(log_fd, "[", 1);
+    int ts_len = format_timestamp(timestamp, sizeof(timestamp));
+    if (ts_len > 0) {
+        write(log_fd, timestamp, ts_len);
+    }
+    write(log_fd, "] ", 2);
+    
     // Escreve a linha no ficheiro
     ssize_t written = write(log_fd, line, strlen(line));
     if (written == -1) {
