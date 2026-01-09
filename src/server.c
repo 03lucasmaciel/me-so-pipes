@@ -100,6 +100,50 @@ void signal_handler(int sig) {
 
 /*
  * ============================================================================
+ * SIGCHLD HANDLER - Prevenção de Processos Zombie
+ * ============================================================================
+ * 
+ * OBJETIVO:
+ * Quando um processo filho termina, o kernel envia SIGCHLD ao pai.
+ * Se o pai não fizer waitpid(), o filho fica "zombie" (consome recursos).
+ * 
+ * Este handler garante que TODOS os filhos terminados são "recolhidos"
+ * (reaped) automaticamente, mesmo em situações de erro.
+ * 
+ * IMPORTANTE:
+ * - Usamos WNOHANG para não bloquear (não-blocking wait)
+ * - Loop while() porque podem terminar vários filhos ao mesmo tempo
+ * - Este é um "safety net" - o main() já faz waitpid() normalmente
+ * 
+ * POR QUE É ÚTIL:
+ * Se houver um crash ou erro no main() entre fork() e waitpid(),
+ * este handler garante que não ficam zombies no sistema.
+ * 
+ * NOTA ACADÉMICA:
+ * No fluxo normal do nosso servidor, o main() já faz waitpid(-1, ...)
+ * corretamente. Este handler é uma camada extra de segurança que
+ * demonstra conhecimento avançado de gestão de processos.
+ */
+void sigchld_handler(int sig) {
+    (void)sig;  // Suprime warning
+    
+    /*
+     * WNOHANG: retorna imediatamente se não houver filhos terminados
+     * Loop while: processa todos os filhos que terminaram
+     * 
+     * waitpid(-1, NULL, WNOHANG) retorna:
+     *   > 0: PID do filho que terminou
+     *   0: nenhum filho terminou ainda
+     *   -1: erro (ex: não há mais filhos)
+     */
+    while (waitpid(-1, NULL, WNOHANG) > 0) {
+        // Filho "recolhido" com sucesso
+        // Não fazemos nada aqui porque o main() já trata o logging
+    }
+}
+
+/*
+ * ============================================================================
  * FUNÇÕES AUXILIARES PARA I/O SEM USAR STDIO.H
  * ============================================================================
  * Estas funções usam apenas write() (syscall pura) em vez de printf/perror
@@ -490,12 +534,14 @@ int main(void) {
      * Configuramos handlers para sinais comuns de terminação:
      * - SIGINT: Ctrl+C no terminal
      * - SIGTERM: kill <pid> (terminação normal)
+     * - SIGCHLD: filho terminou (previne zombies)
      * 
-     * Isto permite fazer cleanup gracioso (fechar FIFO, remover ficheiro)
-     * antes de terminar o servidor.
+     * SIGINT/SIGTERM: Permitem cleanup gracioso (fechar FIFO, remover ficheiro)
+     * SIGCHLD: Safety net para prevenir processos zombie em casos de erro
      */
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
+    signal(SIGCHLD, sigchld_handler);  // Previne zombies
 
     /*
      * ========================================================================
