@@ -160,8 +160,6 @@ make
 
 ### Opção 2: macOS (via Multipass)
 
-### Opção 2: macOS (via Multipass)
-
 ```bash
 # Criar VM Ubuntu
 multipass launch 24.04 --name so-projeto --cpus 2 --mem 2G --disk 10G
