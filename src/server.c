@@ -271,6 +271,27 @@ pid_t execute_command(char *cmd) {
     }
 
     /*
+     * ========================================================================
+     * VALIDAÇÃO: Verifica se o comando cabe no buffer
+     * ========================================================================
+     * Se o comando for maior que 511 caracteres, não conseguimos processá-lo
+     * de forma segura. Melhor rejeitar com mensagem de erro clara.
+     */
+    #define MAX_CMD_LENGTH 511
+    if (strlen(cmd) > MAX_CMD_LENGTH) {
+        print_err("[SERVER] Erro: Comando demasiado longo (max ");
+        print_int(STDERR_FILENO, MAX_CMD_LENGTH);
+        print_err(" chars): '");
+        // Mostra só os primeiros 50 chars para não poluir o terminal
+        char preview[51];
+        strncpy(preview, cmd, 50);
+        preview[50] = '\0';
+        print_err(preview);
+        print_err("...'\n");
+        return -1;
+    }
+
+    /*
      * Faz uma cópia do comando porque strtok() modifica a string original
      */
     char cmd_copy[512];

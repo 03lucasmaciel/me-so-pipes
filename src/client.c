@@ -175,7 +175,14 @@ int main(int argc, char *argv[]) {
         
         // Verifica se ainda há espaço na mensagem
         if (strlen(message) + strlen(argv[i]) + 2 > MAX_MESSAGE) {
-            print_err("[CLIENT] Erro: mensagem demasiado longa\n");
+            print_err("[CLIENT] Erro: mensagem total demasiado longa (max ");
+            print_int(STDERR_FILENO, MAX_MESSAGE);
+            print_err(" bytes)\n");
+            print_err("[CLIENT] Tamanho atual: ");
+            print_int(STDERR_FILENO, (int)strlen(message));
+            print_err(" bytes, tentou adicionar: ");
+            print_int(STDERR_FILENO, (int)strlen(argv[i]));
+            print_err(" bytes\n");
             exit(EXIT_FAILURE);
         }
         
