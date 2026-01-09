@@ -240,6 +240,15 @@ pid_t execute_command(char *cmd) {
      *   args[1] = "-la"     (primeiro argumento)
      *   args[2] = "/tmp"    (segundo argumento)
      *   args[3] = NULL      (marca o fim do array)
+     * 
+     * LIMITAÇÃO CONHECIDA:
+     * Este parser simples separa apenas por espaços e NÃO respeita aspas.
+     * Comandos como: echo 'hello world'
+     * Serão parseados como: ["echo", "'hello", "world'"]
+     * 
+     * Esta é uma simplificação aceitável dado o âmbito académico do projeto.
+     * Para suportar argumentos com espaços, seria necessário um parser mais
+     * complexo que implemente uma máquina de estados para processar aspas.
      */
     char *args[32];  // Array para guardar os argumentos
     int i = 0;
