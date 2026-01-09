@@ -27,7 +27,6 @@
  * ============================================================================
  */
 
-#include <stdio.h>      // printf(), perror()
 #include <stdlib.h>     // exit(), EXIT_FAILURE
 #include <unistd.h>     // read(), write(), close(), fork(), _exit()
 #include <fcntl.h>      // open(), O_RDONLY, O_WRONLY, O_CREAT, O_APPEND
@@ -35,6 +34,94 @@
 #include <string.h>     // strlen(), strtok_r(), strdup(), strncpy()
 #include <errno.h>      // errno, EEXIST
 #include <sys/wait.h>   // waitpid(), WIFEXITED(), WEXITSTATUS()
+
+/*
+ * ============================================================================
+ * FUNÇÕES AUXILIARES PARA I/O SEM USAR STDIO.H
+ * ============================================================================
+ * Estas funções usam apenas write() (syscall pura) em vez de printf/perror
+ */
+
+/*
+ * Escreve uma string no stdout
+ */
+void print_str(const char *str) {
+    write(STDOUT_FILENO, str, strlen(str));
+}
+
+/*
+ * Escreve uma string no stderr
+ */
+void print_err(const char *str) {
+    write(STDERR_FILENO, str, strlen(str));
+}
+
+/*
+ * Converte um inteiro para string e escreve-o
+ * Retorna o número de caracteres escritos
+ */
+int print_int(int fd, int num) {
+    char buffer[32];
+    int i = 0;
+    int is_negative = 0;
+    
+    if (num == 0) {
+        write(fd, "0", 1);
+        return 1;
+    }
+    
+    if (num < 0) {
+        is_negative = 1;
+        num = -num;
+    }
+    
+    // Converte número para string (ordem inversa)
+    while (num > 0) {
+        buffer[i++] = '0' + (num % 10);
+        num /= 10;
+    }
+    
+    if (is_negative) {
+        buffer[i++] = '-';
+    }
+    
+    // Escreve na ordem correta
+    for (int j = i - 1; j >= 0; j--) {
+        write(fd, &buffer[j], 1);
+    }
+    
+    return i;
+}
+
+/*
+ * Substitui perror() - escreve mensagem de erro com descrição do errno
+ */
+void print_error(const char *msg) {
+    print_err("[SERVER] ");
+    print_err(msg);
+    print_err(": ");
+    
+    // Escreve descrição básica do erro
+    switch (errno) {
+        case EACCES:
+            print_err("Permission denied");
+            break;
+        case EEXIST:
+            print_err("File exists");
+            break;
+        case ENOENT:
+            print_err("No such file or directory");
+            break;
+        case ENOMEM:
+            print_err("Out of memory");
+            break;
+        default:
+            print_err("Error code ");
+            print_int(STDERR_FILENO, errno);
+            break;
+    }
+    print_err("\n");
+}
 
 /* 
  * Caminho do FIFO - tem de ser igual no cliente e no servidor
@@ -81,14 +168,14 @@ void append_log(const char *line) {
      */
     int log_fd = open(LOG_FILE, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (log_fd == -1) {
-        perror("[SERVER] Erro ao abrir o ficheiro de log");
+        print_error("Erro ao abrir o ficheiro de log");
         return;
     }
 
     // Escreve a linha no ficheiro
     ssize_t written = write(log_fd, line, strlen(line));
     if (written == -1) {
-        perror("[SERVER] Erro ao escrever no ficheiro de log");
+        print_error("Erro ao escrever no ficheiro de log");
     }
 
     // Fecha o ficheiro
@@ -182,7 +269,7 @@ pid_t execute_command(char *cmd) {
     pid_t pid = fork();
     
     if (pid == -1) {
-        perror("fork");
+        print_error("fork");
         return -1;
     }
 
@@ -199,14 +286,16 @@ pid_t execute_command(char *cmd) {
          * Se execvp() funcionar, o código abaixo NUNCA é executado
          * porque o processo filho foi substituído pelo novo programa.
          * 
-         * Se chegarmos ao perror(), significa que execvp() falhou
+         * Se chegarmos ao print_error(), significa que execvp() falhou
          * (ex: comando não existe)
          */
-        printf("[Servidor:Filho] A executar '%s'...\n", cmd);
+        print_str("[Servidor:Filho] A executar '");
+        print_str(cmd);
+        print_str("'...\n");
         execvp(args[0], args);
         
         // Só chega aqui se execvp() falhar
-        perror("[Servidor:Filho] Erro no execvp");
+        print_error("Erro no execvp");
         _exit(EXIT_FAILURE);  // Usa _exit() em vez de exit() no filho
     }
 
@@ -256,13 +345,15 @@ int main(void) {
      */
     if (mkfifo(FIFO_PATH, 0666) == -1) {
         if (errno != EEXIST) {
-            perror("mkfifo");
+            print_error("mkfifo");
             exit(EXIT_FAILURE);
         }
         // Se errno == EEXIST, o FIFO já existe e podemos continuar
     }
 
-    printf("[Servidor] A aguardar comandos no FIFO %s ...\n", FIFO_PATH);
+    print_str("[Servidor] A aguardar comandos no FIFO ");
+    print_str(FIFO_PATH);
+    print_str(" ...\n");
 
     /*
      * ========================================================================
@@ -276,7 +367,7 @@ int main(void) {
      */
     fd = open(FIFO_PATH, O_RDONLY);
     if (fd == -1) {
-        perror("open");
+        print_error("open");
         exit(EXIT_FAILURE);
     }
 
@@ -304,7 +395,9 @@ int main(void) {
             // Recebemos dados!
             buffer[bytes] = '\0';  // Adiciona terminador de string
 
-            printf("[Servidor] Mensagem recebida: '%s'\n", buffer);
+            print_str("[Servidor] Mensagem recebida: '");
+            print_str(buffer);
+            print_str("'\n");
 
             /*
              * ================================================================
@@ -364,7 +457,9 @@ int main(void) {
                 cmd = strtok_r(NULL, ";", &saveptr1);
             }
 
-            printf("[Servidor] A executar %d comando(s)...\n", num_commands);
+            print_str("[Servidor] A executar ");
+            print_int(STDOUT_FILENO, num_commands);
+            print_str(" comando(s)...\n");
 
             /*
              * ================================================================
@@ -385,20 +480,53 @@ int main(void) {
 
                 // Prepara a entrada para o log
                 char log_entry[512];
+                int pos = 0;
+                
+                // Copia o comando
+                int cmd_len = strlen(commands[i]);
+                if (cmd_len < 500) {
+                    strncpy(log_entry, commands[i], cmd_len);
+                    pos = cmd_len;
+                }
                 
                 if (WIFEXITED(status)) {
                     // O filho terminou normalmente
                     int exit_code = WEXITSTATUS(status);
-                    snprintf(log_entry, sizeof(log_entry), "%s; exit status: %d\n", 
-                             commands[i], exit_code);
+                    strncpy(log_entry + pos, "; exit status: ", 512 - pos);
+                    pos += 15;
+                    
+                    // Converte exit_code para string manualmente
+                    char num_str[16];
+                    int num_len = 0;
+                    int temp = exit_code;
+                    if (temp == 0) {
+                        num_str[num_len++] = '0';
+                    } else {
+                        while (temp > 0) {
+                            num_str[num_len++] = '0' + (temp % 10);
+                            temp /= 10;
+                        }
+                        // Inverte
+                        for (int j = 0; j < num_len / 2; j++) {
+                            char t = num_str[j];
+                            num_str[j] = num_str[num_len - 1 - j];
+                            num_str[num_len - 1 - j] = t;
+                        }
+                    }
+                    strncpy(log_entry + pos, num_str, num_len);
+                    pos += num_len;
+                    log_entry[pos++] = '\n';
+                    log_entry[pos] = '\0';
                 } else {
                     // O filho terminou de forma anormal (ex: signal)
-                    snprintf(log_entry, sizeof(log_entry), "%s; terminou de forma anormal\n", 
-                             commands[i]);
+                    strncpy(log_entry + pos, "; terminou de forma anormal\n", 512 - pos);
+                    pos += 29;
+                    log_entry[pos] = '\0';
                 }
 
                 // Mostra e guarda o resultado
-                printf("[Servidor] %s", log_entry);
+                print_str("[Servidor] ");
+                print_str(log_entry);
                 append_log(log_entry);
                 
                 // Liberta a memória da cópia do comando
@@ -406,7 +534,9 @@ int main(void) {
             }
 
             if (num_commands > 0) {
-                printf("[Servidor] Todos os %d comando(s) terminaram.\n", num_commands);
+                print_str("[Servidor] Todos os ");
+                print_int(STDOUT_FILENO, num_commands);
+                print_str(" comando(s) terminaram.\n");
             }
 
         } else if (bytes == 0) {
@@ -417,13 +547,13 @@ int main(void) {
              * Quando o cliente fecha a sua ponta do FIFO, read() retorna 0.
              * Temos de fechar e reabrir o FIFO para aceitar novos clientes.
              */
-            printf("[Servidor] Cliente terminou a escrita. A reabrir FIFO...\n");
+            print_str("[Servidor] Cliente terminou a escrita. A reabrir FIFO...\n");
             close(fd);
             fd = open(FIFO_PATH, O_RDONLY);
             
         } else {
             // Erro na leitura
-            perror("read");
+            print_error("read");
             break;
         }
     }
