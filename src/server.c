@@ -472,29 +472,52 @@ int main(void) {
 
             /*
              * ================================================================
-             * Esperar por todos os processos filhos
+             * Esperar por todos os processos filhos (EXECUÇÃO CONCORRENTE)
              * ================================================================
              * 
-             * waitpid() espera que um processo filho termine:
-             * - pids[i]: PID do filho a esperar
+             * IMPORTANTE: Usamos waitpid(-1, ...) para esperar por QUALQUER
+             * filho que termine, não por uma ordem específica. Isto permite
+             * que os comandos executem verdadeiramente em paralelo.
+             * 
+             * Se usássemos waitpid(pids[i], ...) em sequência, teríamos que
+             * esperar que o primeiro comando terminasse antes de verificar os
+             * outros, mesmo que já tenham terminado.
+             * 
+             * waitpid(-1, &status, 0):
+             * - -1: espera por QUALQUER processo filho
              * - &status: variável onde guarda o estado de saída
-             * - 0: sem opções especiais
+             * - 0: bloqueia até um filho terminar
              * 
              * WIFEXITED(status): verifica se o filho terminou normalmente
              * WEXITSTATUS(status): obtém o código de saída (0 = sucesso)
              */
             for (int i = 0; i < num_commands; i++) {
                 int status;
-                waitpid(pids[i], &status, 0);
+                pid_t terminated_pid = waitpid(-1, &status, 0);
+                
+                // Encontra qual comando terminou (mapeamento PID -> índice)
+                int cmd_index = -1;
+                for (int j = 0; j < num_commands; j++) {
+                    if (pids[j] == terminated_pid) {
+                        cmd_index = j;
+                        break;
+                    }
+                }
+                
+                // Se não encontrou o PID (erro improvável), continua
+                if (cmd_index == -1) {
+                    print_err("[Servidor] Aviso: PID terminado não encontrado\n");
+                    continue;
+                }
 
                 // Prepara a entrada para o log
                 char log_entry[512];
                 int pos = 0;
                 
                 // Copia o comando
-                int cmd_len = strlen(commands[i]);
+                int cmd_len = strlen(commands[cmd_index]);
                 if (cmd_len < 500) {
-                    strncpy(log_entry, commands[i], cmd_len);
+                    strncpy(log_entry, commands[cmd_index], cmd_len);
                     pos = cmd_len;
                 }
                 
@@ -537,8 +560,10 @@ int main(void) {
                 print_str("[Servidor] ");
                 print_str(log_entry);
                 append_log(log_entry);
-                
-                // Liberta a memória da cópia do comando
+            }
+            
+            // Liberta memória de todos os comandos após processamento completo
+            for (int i = 0; i < num_commands; i++) {
                 free(commands[i]);
             }
 
