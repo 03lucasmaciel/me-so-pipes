@@ -34,6 +34,68 @@
 #include <string.h>     // strlen(), strtok_r(), strdup(), strncpy()
 #include <errno.h>      // errno, EEXIST
 #include <sys/wait.h>   // waitpid(), WIFEXITED(), WEXITSTATUS()
+#include <signal.h>     // signal(), SIGINT, SIGTERM
+
+/* 
+ * Caminho do FIFO - tem de ser igual no cliente e no servidor
+ */
+#define FIFO_PATH "/tmp/exec_fifo"
+
+/* 
+ * Caminho do ficheiro de log onde guardamos os resultados
+ */
+#define LOG_FILE "logs/server.log"
+
+/* 
+ * Tamanho máximo do buffer de leitura
+ */
+#define MAX_BUFFER 4096
+
+/*
+ * ============================================================================
+ * VARIÁVEIS GLOBAIS PARA SIGNAL HANDLING
+ * ============================================================================
+ * Estas variáveis são usadas pelo signal handler para fazer cleanup gracioso.
+ * volatile sig_atomic_t garante que as operações são atómicas e seguras.
+ */
+volatile sig_atomic_t should_exit = 0;  // Flag para terminar o loop principal
+int server_fd = -1;                      // File descriptor do FIFO (para fechar)
+
+/*
+ * ============================================================================
+ * SIGNAL HANDLER - Tratamento de Sinais (SIGINT, SIGTERM)
+ * ============================================================================
+ * 
+ * OBJETIVO:
+ * Quando o utilizador pressiona Ctrl+C (SIGINT) ou o sistema envia SIGTERM,
+ * fazemos cleanup gracioso: fechamos o FIFO e removemos o ficheiro.
+ * 
+ * IMPORTANTE:
+ * - Dentro de signal handlers, só podemos usar funções "async-signal-safe"
+ * - write(), close(), unlink(), _exit() são seguras
+ * - malloc(), free(), printf() NÃO são seguras
+ * 
+ * volatile sig_atomic_t garante que a escrita é atómica (não pode ser
+ * interrompida a meio).
+ */
+void signal_handler(int sig) {
+    (void)sig;  // Suprime warning de parâmetro não usado
+    
+    // Mensagem de saída (safe para signal handler)
+    const char msg[] = "\n[Servidor] Sinal recebido. A encerrar...\n";
+    write(STDOUT_FILENO, msg, sizeof(msg) - 1);
+    
+    // Fecha o FIFO se estiver aberto
+    if (server_fd != -1) {
+        close(server_fd);
+    }
+    
+    // Remove o ficheiro FIFO
+    unlink(FIFO_PATH);
+    
+    // Termina o processo (usa _exit em vez de exit em signal handlers)
+    _exit(0);
+}
 
 /*
  * ============================================================================
@@ -122,21 +184,6 @@ void print_error(const char *msg) {
     }
     print_err("\n");
 }
-
-/* 
- * Caminho do FIFO - tem de ser igual no cliente e no servidor
- */
-#define FIFO_PATH "/tmp/exec_fifo"
-
-/* 
- * Caminho do ficheiro de log onde guardamos os resultados
- */
-#define LOG_FILE "logs/server.log"
-
-/* 
- * Tamanho máximo do buffer de leitura
- */
-#define MAX_BUFFER 4096
 
 
 /*
@@ -333,7 +380,21 @@ int main(void) {
 
     /*
      * ========================================================================
-     * PASSO 1: Criar a pasta de logs
+     * PASSO 1: Registar Signal Handlers
+     * ========================================================================
+     * Configuramos handlers para sinais comuns de terminação:
+     * - SIGINT: Ctrl+C no terminal
+     * - SIGTERM: kill <pid> (terminação normal)
+     * 
+     * Isto permite fazer cleanup gracioso (fechar FIFO, remover ficheiro)
+     * antes de terminar o servidor.
+     */
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    /*
+     * ========================================================================
+     * PASSO 2: Criar a pasta de logs
      * ========================================================================
      * mkdir() cria a pasta se não existir.
      * Se já existir, não faz nada (ignora o erro).
@@ -342,7 +403,7 @@ int main(void) {
 
     /*
      * ========================================================================
-     * PASSO 2: Criar o FIFO (named pipe)
+     * PASSO 3: Criar o FIFO (named pipe)
      * ========================================================================
      * 
      * mkfifo() cria um ficheiro especial do tipo FIFO.
@@ -363,32 +424,40 @@ int main(void) {
     print_str("[Servidor] A aguardar comandos no FIFO ");
     print_str(FIFO_PATH);
     print_str(" ...\n");
+    print_str("[Servidor] Pressiona Ctrl+C para terminar.\n");
 
     /*
      * ========================================================================
-     * PASSO 3: Abrir o FIFO para leitura
+     * PASSO 4: Abrir o FIFO para leitura
      * ========================================================================
      * 
      * open() com O_RDONLY abre o FIFO apenas para leitura.
      * 
      * NOTA IMPORTANTE:
      * Esta chamada BLOQUEIA até que um cliente abra o FIFO para escrita!
+     * 
+     * Guardamos o fd na variável global para o signal handler poder fechar.
      */
     fd = open(FIFO_PATH, O_RDONLY);
     if (fd == -1) {
         print_error("open");
         exit(EXIT_FAILURE);
     }
+    server_fd = fd;  // Guarda na global para signal handler
 
     /*
      * ========================================================================
-     * PASSO 4: Loop principal - Processar mensagens
+     * PASSO 5: Loop principal - Processar mensagens
      * ========================================================================
      * 
      * O servidor fica num ciclo infinito:
      * 1. Lê uma mensagem do FIFO
      * 2. Processa os comandos
      * 3. Espera por mais mensagens
+     * 
+     * O loop pode ser interrompido por:
+     * - Signal handler (SIGINT/SIGTERM)
+     * - Erro fatal na leitura
      */
     while (1) {
         /*
